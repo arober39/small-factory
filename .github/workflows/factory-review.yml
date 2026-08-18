@@ -1,0 +1,62 @@
+name: "Factory: review"
+
+# Review station, second half (CI is the first half). An independent agent
+# with no authorship stake reads the diff and reports only problems.
+
+on:
+  pull_request:
+    types: [opened, synchronize]
+
+jobs:
+  review:
+    if: startsWith(github.head_ref, 'factory/')
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      pull-requests: write
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+      - run: npm install -g @anthropic-ai/claude-code
+      - name: Review the diff
+        env:
+          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+        run: |
+          git fetch origin "${{ github.base_ref }}"
+          git diff "origin/${{ github.base_ref }}...HEAD" > pr.diff
+          cat > prompt.txt <<'PROMPT'
+          You are the review station of a small software factory. Your only
+          job is to find problems in the diff stored in pr.diff: bugs, missed
+          edge cases, violations of the conventions in CLAUDE.md, and tests
+          that do not actually exercise the change. You did not write this
+          code and have no stake in approving it. Read the surrounding source
+          files when the diff alone is not enough to judge.
+
+          Report each problem with the file and line. If, after genuinely
+          looking, you find nothing wrong, say "No problems found" and state
+          briefly what you checked. Do not praise the code.
+          PROMPT
+          claude -p "$(cat prompt.txt)" --allowedTools "Read,Grep,Glob" > review.md
+      - name: Post the review
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          {
+            echo "## Reviewer agent"
+            echo
+            cat review.md
+          } > comment.md
+          gh pr comment "${{ github.event.pull_request.number }}" --repo "${{ github.repository }}" --body-file comment.md
+      - name: Save the transcript (observability station)
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: review-pr-${{ github.event.pull_request.number }}
+          path: |
+            prompt.txt
+            pr.diff
+            review.md

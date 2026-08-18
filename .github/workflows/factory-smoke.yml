@@ -1,0 +1,43 @@
+name: "Factory: smoke check"
+
+# Delivery station, second half (human approval + merge-on-green is the
+# first half). After every merge to main, boot the app and exercise the
+# paths users actually hit. On failure, open a revert PR: the gate that
+# says no after the code is already in.
+
+on:
+  push:
+    branches: [main]
+
+jobs:
+  smoke:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+      pull-requests: write
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+      - run: npm ci
+      - name: Smoke-test the new revision
+        run: bash scripts/smoke.sh
+      - name: Open a revert PR (the gate that says no)
+        if: failure()
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          SHA="${{ github.sha }}"
+          git config user.name "factory-bot"
+          git config user.email "factory-bot@users.noreply.github.com"
+          git checkout -b "revert/$SHA"
+          git revert --no-edit "$SHA"
+          git push origin "revert/$SHA"
+          gh pr create \
+            --title "Revert $SHA: smoke check failed" \
+            --body "The post-merge smoke check failed on $SHA. Merging this PR restores the last good revision. The failing run has the details." \
+            --head "revert/$SHA"

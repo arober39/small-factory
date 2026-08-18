@@ -1,0 +1,28 @@
+name: Factory task
+description: A scoped unit of work for the factory to plan and execute
+labels: ["factory"]
+body:
+  - type: input
+    id: goal
+    attributes:
+      label: Goal
+      description: What should exist when this task is done, in one sentence.
+      placeholder: Links older than 30 days return a 410 page.
+    validations:
+      required: true
+  - type: textarea
+    id: constraints
+    attributes:
+      label: Constraints
+      description: Boundaries the agent must work within, and anything it must not touch.
+      placeholder: No new dependencies. The store stays in-memory.
+    validations:
+      required: true
+  - type: textarea
+    id: done-means
+    attributes:
+      label: Done means
+      description: The checks that prove this is finished. If you can't fill this in, the task isn't ready for an agent.
+      placeholder: A test covers the expired-link path. npm test, lint, and typecheck pass.
+    validations:
+      required: true

@@ -1,0 +1,102 @@
+name: "Factory: execute"
+
+# Execution station. Fires when a maintainer comments /approve on a
+# factory-labeled issue. Runs the coding agent headless against the approved
+# plan, verifies the result independently, and opens a pull request.
+#
+# Uses FACTORY_GITHUB_TOKEN (a fine-grained PAT) instead of the default token
+# because pushes made with the default GITHUB_TOKEN do not trigger other
+# workflows, which would silently skip the CI and review stations.
+
+on:
+  issue_comment:
+    types: [created]
+
+jobs:
+  execute:
+    if: >-
+      !github.event.issue.pull_request &&
+      contains(github.event.issue.labels.*.name, 'factory') &&
+      startsWith(github.event.comment.body, '/approve') &&
+      contains(fromJSON('["OWNER","MEMBER","COLLABORATOR"]'), github.event.comment.author_association)
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+      issues: write
+      pull-requests: write
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          token: ${{ secrets.FACTORY_GITHUB_TOKEN }}
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+      - run: npm ci
+      - run: npm install -g @anthropic-ai/claude-code
+      - name: Fetch the approved plan
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh api "repos/${{ github.repository }}/issues/${{ github.event.issue.number }}/comments" \
+            --jq '[.[] | select(.body | startswith("## Proposed plan"))] | last | .body' > plan.md
+          if [ ! -s plan.md ] || [ "$(cat plan.md)" = "null" ]; then
+            echo "::error::No plan comment found. The planning station runs when the issue is labeled 'factory'."
+            exit 1
+          fi
+      - name: Execute the plan
+        env:
+          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+          ISSUE_TITLE: ${{ github.event.issue.title }}
+          ISSUE_BODY: ${{ github.event.issue.body }}
+          ISSUE_NUMBER: ${{ github.event.issue.number }}
+        run: |
+          cat > prompt.txt <<'PROMPT'
+          You are the execution station of a small software factory. Implement
+          the approved plan below in this repository.
+
+          Rules:
+          - Follow the conventions in CLAUDE.md.
+          - Never modify .github/, CLAUDE.md, or the dependency lists in
+            package.json.
+          - Keep the change as small as the plan allows.
+          - Before finishing, run npm test, npm run lint, and npm run
+            typecheck, and fix anything that fails.
+          PROMPT
+          printf '\nThe task (issue #%s):\nTitle: %s\n\n%s\n\nThe approved plan:\n' \
+            "$ISSUE_NUMBER" "$ISSUE_TITLE" "$ISSUE_BODY" >> prompt.txt
+          cat plan.md >> prompt.txt
+          claude -p "$(cat prompt.txt)" \
+            --permission-mode acceptEdits \
+            --allowedTools "Read,Grep,Glob,Edit,Write,Bash(npm test),Bash(npm run lint),Bash(npm run typecheck)" \
+            > execution-log.md
+      - name: Verify independently
+        run: |
+          npm test
+          npm run lint
+          npm run typecheck
+      - name: Open a pull request
+        env:
+          GH_TOKEN: ${{ secrets.FACTORY_GITHUB_TOKEN }}
+          ISSUE_TITLE: ${{ github.event.issue.title }}
+        run: |
+          N="${{ github.event.issue.number }}"
+          git config user.name "factory-bot"
+          git config user.email "factory-bot@users.noreply.github.com"
+          git checkout -b "factory/issue-$N"
+          git add -- . ':!prompt.txt' ':!plan.md' ':!execution-log.md'
+          git commit -m "Factory: $ISSUE_TITLE (#$N)"
+          git push origin "factory/issue-$N"
+          gh pr create \
+            --title "Factory: $ISSUE_TITLE" \
+            --body "Closes #$N. Built by the execution station from the approved plan. The full transcript is attached to the workflow run as an artifact." \
+            --head "factory/issue-$N"
+      - name: Save the transcript (observability station)
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: execution-issue-${{ github.event.issue.number }}
+          path: |
+            prompt.txt
+            plan.md
+            execution-log.md

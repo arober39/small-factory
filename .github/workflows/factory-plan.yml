@@ -1,0 +1,67 @@
+name: "Factory: plan"
+
+# Planning station. Fires when an issue gets the `factory` label (the intake
+# template applies it automatically), reads the repo, and posts a numbered
+# plan as a comment. Nothing executes until a human approves.
+
+on:
+  issues:
+    types: [labeled]
+
+jobs:
+  plan:
+    if: github.event.label.name == 'factory'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      issues: write
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+      - run: npm install -g @anthropic-ai/claude-code
+      - name: Draft a plan
+        env:
+          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+          ISSUE_TITLE: ${{ github.event.issue.title }}
+          ISSUE_BODY: ${{ github.event.issue.body }}
+        run: |
+          cat > prompt.txt <<'PROMPT'
+          You are the planning station of a small software factory. A task has
+          arrived as a GitHub issue. Read CLAUDE.md and the relevant source
+          files, then produce a numbered implementation plan.
+
+          Rules:
+          - Plan only: do not write code and do not modify files.
+          - Each step names the files it touches.
+          - End with a verification step: which tests or checks prove the
+            task's definition of done.
+          - If the task is unclear or too large for one run, say that instead
+            of planning around it.
+
+          The task:
+          PROMPT
+          printf 'Title: %s\n\n%s\n' "$ISSUE_TITLE" "$ISSUE_BODY" >> prompt.txt
+          claude -p "$(cat prompt.txt)" --allowedTools "Read,Grep,Glob" > plan.md
+      - name: Post the plan for human approval
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          {
+            echo "## Proposed plan"
+            echo
+            cat plan.md
+            echo
+            echo "---"
+            echo "A maintainer can comment \`/approve\` to send this plan to execution."
+          } > comment.md
+          gh issue comment "${{ github.event.issue.number }}" --repo "${{ github.repository }}" --body-file comment.md
+      - name: Save the transcript (observability station)
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: plan-issue-${{ github.event.issue.number }}
+          path: |
+            prompt.txt
+            plan.md
