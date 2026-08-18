@@ -12,6 +12,13 @@ export class SlugTakenError extends Error {
   }
 }
 
+// Links expire 30 days after creation; computed from createdAt, never stored.
+export const LINK_TTL_MS = 30 * 24 * 60 * 60 * 1000;
+
+export function isExpired(link: Link): boolean {
+  return Date.now() - Date.parse(link.createdAt) > LINK_TTL_MS;
+}
+
 const links = new Map<string, Link>();
 
 // No 0/o/1/l/i: slugs get read aloud and typed by hand.

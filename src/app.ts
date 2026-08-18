@@ -1,5 +1,5 @@
 import express from "express";
-import { createLink, getLink, recordVisit, SlugTakenError } from "./store";
+import { createLink, getLink, isExpired, recordVisit, SlugTakenError } from "./store";
 import { indexHtml } from "./ui";
 
 const SLUG_PATTERN = /^[a-z0-9-]{1,32}$/;
@@ -62,6 +62,10 @@ export function createApp() {
     const link = getLink(req.params.slug);
     if (!link) {
       res.status(404).json({ error: "not found" });
+      return;
+    }
+    if (isExpired(link)) {
+      res.status(410).json({ error: "link expired" });
       return;
     }
     recordVisit(link.slug);
